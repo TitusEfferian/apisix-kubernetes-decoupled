@@ -75,13 +75,13 @@ class ApisixControlPlane extends Construct {
     const configSourceVolume = Volume.fromConfigMap(
       this,
       "config-source-volume",
-      configMap
+      configMap,
     );
-    
+
     const apisixWritableVolume = Volume.fromEmptyDir(
       this,
       "apisix-writable-dir-volume",
-      "apisix-writable-dir"
+      "apisix-writable-dir",
     );
 
     const initContainer = deployment.addInitContainer({
@@ -129,97 +129,108 @@ class ApisixControlPlane extends Construct {
   }
 }
 
+/**
+ * Defines the APISIX Data Plane.
+ *
+ * FIX: This construct has been updated to use the same robust initContainer
+ * pattern as the control plane, ensuring consistency and preventing permission errors.
+ */
 export class ApisixDataPlane extends Construct {
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
     const image = "apache/apisix:3.9.1-debian";
-
     const replicas = 2;
-
     const labels = { app: "apisix-data-plane" };
-
-    // 1. Define the Data Plane's configuration.
-
-    // This configuration disables the Admin API for security.
 
     const dataPlaneConfig = {
       apisix: {
-        node_listen: 9080, // Listens for user-facing proxy traffic.
-
-        enable_admin: false, // Critical: Disables the Admin API on the data plane.
+        node_listen: 9080,
+        enable_admin: false,
       },
-
       deployment: {
-        role: "data_plane", // Critical: Defines the instance role.
-
+        role: "data_plane",
         role_data_plane: {
           config_provider: "etcd",
         },
-
         etcd: {
-          host: [ETCD_HOST_FQDN], // Connects to the same etcd as the control plane.
-
+          host: [ETCD_HOST_FQDN],
           prefix: "/apisix",
-
           timeout: 30,
         },
       },
     };
 
-    // 2. Create the Kubernetes ConfigMap.
-
     const configMap = new ConfigMap(this, "config", {
       metadata: {
         name: "apisix-data-plane-config",
-
         namespace: APP_NAMESPACE,
       },
-
       data: {
         "config.yaml": Yaml.stringify(dataPlaneConfig),
       },
     });
 
-    // 3. Create the Kubernetes Deployment.
-
     const deployment = new Deployment(this, "deployment", {
       metadata: { namespace: APP_NAMESPACE },
-
       replicas: replicas,
-
       podMetadata: { labels: labels },
+      // This security context applies to the main container.
+      securityContext: new PodSecurityContext({
+        user: 1000,
+        fsGroup: 1000,
+        group: 1000,
+      }),
     });
 
-    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
+    const configSourceVolume = Volume.fromConfigMap(
+      this,
+      "config-source-volume",
+      configMap,
+    );
 
-    deployment.addContainer({
-      name: "apisix-data-plane",
+    const apisixWritableVolume = Volume.fromEmptyDir(
+      this,
+      "apisix-writable-dir-volume",
+      "apisix-writable-dir",
+    );
 
+    // FIX: Add a new emptyDir volume specifically for the /tmp directory.
+    const tmpVolume = Volume.fromEmptyDir(this, "tmp-volume", "tmp");
+
+    const initContainer = deployment.addInitContainer({
+      name: "config-initializer",
       image: image,
-
-      ports: [{ number: 9080, name: "proxy-http" }],
-
-      volumeMounts: [
-        {
-          volume: configVolume,
-
-          path: "/usr/local/apisix/conf/config.yaml",
-
-          subPath: "config.yaml",
-        },
+      // Run as root to handle file permissions.
+      securityContext: {
+        user: 0,
+        ensureNonRoot: false,
+      },
+      // Copy files, apply config, and set ownership.
+      command: [
+        "sh",
+        "-c",
+        "cp -r /usr/local/apisix/* /writable-apisix/ && cp /source-config/config.yaml /writable-apisix/conf/config.yaml && chown -R 1000:1000 /writable-apisix",
       ],
     });
 
-    // 4. Expose the Data Plane proxy via a LoadBalancer Service.
+    initContainer.mount("/source-config", configSourceVolume, {
+      readOnly: true,
+    });
+    initContainer.mount("/writable-apisix", apisixWritableVolume);
 
-    // This makes the API gateway accessible from the internet.
+    const apisixContainer = deployment.addContainer({
+      name: "apisix-data-plane",
+      image: image,
+      ports: [{ number: 9080, name: "proxy-http" }],
+    });
+
+    apisixContainer.mount("/usr/local/apisix", apisixWritableVolume);
+    apisixContainer.mount("/tmp", tmpVolume);
 
     deployment.exposeViaService({
       name: "apisix-gateway",
-
       serviceType: ServiceType.LOAD_BALANCER,
-
       ports: [{ port: 80, targetPort: 9080, name: "http" }],
     });
   }
