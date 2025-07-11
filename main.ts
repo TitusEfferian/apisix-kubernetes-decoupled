@@ -184,18 +184,15 @@ export class ApisixDataPlane extends Construct {
       "apisix-writable-dir",
     );
 
-    // FIX: Add a new emptyDir volume specifically for the /tmp directory.
     const tmpVolume = Volume.fromEmptyDir(this, "tmp-volume", "tmp");
 
     const initContainer = deployment.addInitContainer({
       name: "config-initializer",
       image: image,
-      // Run as root to handle file permissions.
       securityContext: {
         user: 0,
         ensureNonRoot: false,
       },
-      // Copy files, apply config, and set ownership.
       command: [
         "sh",
         "-c",
