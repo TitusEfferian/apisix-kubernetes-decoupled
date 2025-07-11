@@ -60,17 +60,6 @@ class ApisixControlPlane extends Construct {
       },
     });
 
-    const deployment = new Deployment(this, "deployment", {
-      metadata: { namespace: APP_NAMESPACE },
-      replicas: 1,
-      podMetadata: { labels: labels },
-      securityContext: new PodSecurityContext({
-        user: 1000,
-        fsGroup: 1000,
-        group: 1000,
-      }),
-    });
-
     const configSourceVolume = Volume.fromConfigMap(
       this,
       "config-source-volume",
@@ -83,32 +72,55 @@ class ApisixControlPlane extends Construct {
       "apisix-writable-dir",
     );
 
-    const initContainer = deployment.addInitContainer({
-      name: "config-initializer",
-      image: image,
-      securityContext: {
-        user: 0,
-        ensureNonRoot: false,
-      },
-      command: [
-        "sh",
-        "-c",
-        "cp -r /usr/local/apisix/* /writable-apisix/ && cp /source-config/config.yaml /writable-apisix/conf/config.yaml && chown -R 1000:1000 /writable-apisix",
+    const deployment = new Deployment(this, "deployment", {
+      metadata: { namespace: APP_NAMESPACE },
+      replicas: 1,
+      podMetadata: { labels: labels },
+      securityContext: new PodSecurityContext({
+        user: 1000,
+        fsGroup: 1000,
+        group: 1000,
+      }),
+      containers: [
+        {
+          name: "apisix-control-plane",
+          image: image,
+          ports: [{ number: 9180, name: "admin-api" }],
+          volumeMounts: [
+            {
+              volume: apisixWritableVolume,
+              path: "/usr/local/apisix",
+            },
+          ],
+        },
+      ],
+      initContainers: [
+        {
+          name: "config-initializer",
+          image: image,
+          securityContext: {
+            user: 0,
+            ensureNonRoot: false,
+          },
+          command: [
+            "sh",
+            "-c",
+            "cp -r /usr/local/apisix/* /writable-apisix/ && cp /source-config/config.yaml /writable-apisix/conf/config.yaml && chown -R 1000:1000 /writable-apisix",
+          ],
+          volumeMounts: [
+            {
+              volume: configSourceVolume,
+              path: "/source-config",
+              readOnly: true,
+            },
+            {
+              volume: apisixWritableVolume,
+              path: "/writable-apisix",
+            },
+          ],
+        },
       ],
     });
-
-    initContainer.mount("/source-config", configSourceVolume, {
-      readOnly: true,
-    });
-    initContainer.mount("/writable-apisix", apisixWritableVolume);
-
-    const apisixContainer = deployment.addContainer({
-      name: "apisix-control-plane",
-      image: image,
-      ports: [{ number: 9180, name: "admin-api" }],
-    });
-
-    apisixContainer.mount("/usr/local/apisix", apisixWritableVolume);
 
     deployment.exposeViaService({
       name: "apisix-admin",
@@ -222,6 +234,115 @@ export class ApisixDataPlane extends Construct {
   }
 }
 
+export class ApisixDashboard extends Construct {
+  constructor(scope: Construct, id: string) {
+    super(scope, id);
+
+    const labels = { app: "apisix-dashboard" };
+    const image = "apache/apisix-dashboard:3.0.1-alpine";
+
+    const configMap = new ConfigMap(this, "config", {
+      metadata: {
+        namespace: APP_NAMESPACE,
+        name: "apisix-dashboard-config",
+      },
+      data: {
+        "conf.yaml": Yaml.stringify({
+          conf: {
+            listen: {
+              host: "0.0.0.0",
+              port: 9000, // Internal port for the manager-api backend
+            },
+            etcd: {
+              // The key must be 'endpoints' and it must be a list.
+              endpoints: [
+                `http://etcd.${APP_NAMESPACE}.svc.cluster.local:2379`,
+              ],
+            },
+            authentication: {
+              secret: "secret", // IMPORTANT: Change this in a real environment
+              expire_time: 3600,
+              // A default user is required for initial login.
+              users: [
+                {
+                  username: "admin",
+                  password: "admin",
+                },
+              ],
+            },
+            // Define log paths to ensure they are writable.
+            log: {
+              error_log: {
+                file_path: "/usr/local/apisix-dashboard/logs/error.log",
+                level: "warn",
+              },
+              access_log: {
+                file_path: "/usr/local/apisix-dashboard/logs/access.log",
+              },
+            },
+          },
+        }),
+        "config.json": JSON.stringify([
+          {
+            name: "APISIX on Kubernetes",
+            // This must point to the 'apisix-admin' service created by the Control Plane construct.
+            host: `http://apisix-admin.${APP_NAMESPACE}.svc.cluster.local:9180`,
+            key: "edd1c9f034335f136f87ad84b625c8f1",
+          },
+        ]),
+      },
+    });
+
+    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
+    const logsVolume = Volume.fromEmptyDir(
+      this,
+      "logs-volume",
+      "apisix-dashboard-logs",
+    );
+    const deployment = new Deployment(this, "deployment", {
+      metadata: {
+        namespace: APP_NAMESPACE,
+        name: "apisix-dashboard",
+      },
+      podMetadata: { labels },
+      replicas: 1,
+      containers: [
+        {
+          name: "apisix-dashboard",
+          image: image,
+          securityContext: {
+            user: 0,
+            ensureNonRoot: false,
+          },
+          ports: [{ number: 80, name: "http" }],
+          volumeMounts: [
+            {
+              volume: configVolume,
+              path: "/usr/share/nginx/html/assets/config.json",
+              subPath: "config.json",
+            },
+            {
+              volume: configVolume,
+              path: "/usr/local/apisix-dashboard/conf/conf.yaml",
+              subPath: "conf.yaml",
+            },
+            {
+              volume: logsVolume,
+              path: "/usr/local/apisix-dashboard/logs",
+            },
+          ],
+        },
+      ],
+    });
+
+    deployment.exposeViaService({
+      name: "apisix-dashboard",
+      serviceType: ServiceType.CLUSTER_IP,
+      ports: [{ port: 80, targetPort: 80 }],
+    });
+  }
+}
+
 export class MyChart extends Chart {
   constructor(scope: Construct, id: string, props: ChartProps = {}) {
     super(scope, id, props);
@@ -239,6 +360,8 @@ export class MyChart extends Chart {
     new ApisixControlPlane(this, "apisix-control-plane");
 
     new ApisixDataPlane(this, "apisix-data-plane");
+
+    new ApisixDashboard(this, "apisix-dashboard");
   }
 }
 
