@@ -20,52 +20,39 @@ class ApisixControlPlane extends Construct {
     super(scope, id);
 
     const labels = { app: "apisix-control-plane" };
-
     const image = "apache/apisix:3.9.1-debian";
 
     const configMap = new ConfigMap(this, "config", {
       metadata: {
         namespace: APP_NAMESPACE,
-
         name: "apisix-control-plane-config",
       },
-
       data: {
         "config.yaml": Yaml.stringify({
           apisix: {
             node_listen: 9080,
           },
-
           deployment: {
             role: "control_plane",
-
             role_control_plane: {
               config_provider: "etcd",
             },
-
             etcd: {
               host: [ETCD_HOST_FQDN],
-
               prefix: "/apisix",
-
               timeout: 30,
             },
-
             admin: {
               admin_listen: {
                 port: 9180,
               },
-
               admin_key: [
                 {
                   name: "admin",
-
                   key: "edd1c9f034335f136f87ad84b625c8f1",
-
                   role: "admin",
                 },
               ],
-
               allow_admin: ["0.0.0.0/0"],
             },
           },
@@ -75,67 +62,35 @@ class ApisixControlPlane extends Construct {
 
     const deployment = new Deployment(this, "deployment", {
       metadata: { namespace: APP_NAMESPACE },
-
       replicas: 1,
-
       podMetadata: { labels: labels },
-
       securityContext: new PodSecurityContext({
         user: 1000,
-
         fsGroup: 1000,
-
         group: 1000,
       }),
     });
 
-    const configSourceVolume = Volume.fromConfigMap(
-      this,
-      "config-source-volume",
-      configMap,
-    );
-
-    const configDestVolume = Volume.fromEmptyDir(
-      this,
-      "config-dest-volume",
-      "apisix-conf",
-    );
-
-    const initContainer = deployment.addInitContainer({
-      name: "config-initializer",
-
-      image: "busybox:1.36", // A minimal image for the copy task.
-
-      command: ["sh", "-c", "cp -L /source-config/* /dest-config/"],
-    });
-
-    initContainer.mount("/source-config", configSourceVolume, {
-      readOnly: true,
-    });
-
-    initContainer.mount("/dest-config", configDestVolume);
+    // Create a single volume from the ConfigMap.
+    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
 
     const apisixContainer = deployment.addContainer({
       name: "apisix-control-plane",
-
       image: image,
-
       ports: [{ number: 9180, name: "admin-api" }],
     });
 
-    apisixContainer.mount("/usr/local/apisix/conf", configDestVolume);
+    apisixContainer.mount("/usr/local/apisix/conf/config.yaml", configVolume, {
+      subPath: "config.yaml",
+    });
 
     deployment.exposeViaService({
       name: "apisix-admin",
-
       serviceType: ServiceType.CLUSTER_IP,
-
       ports: [
         {
           port: 9180,
-
           targetPort: 9180,
-
           name: "admin-api",
         },
       ],
