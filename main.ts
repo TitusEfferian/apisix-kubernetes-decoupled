@@ -64,7 +64,6 @@ class ApisixControlPlane extends Construct {
       metadata: { namespace: APP_NAMESPACE },
       replicas: 1,
       podMetadata: { labels: labels },
-      // This security context applies to the main container, ensuring it runs as a non-root user.
       securityContext: new PodSecurityContext({
         user: 1000,
         fsGroup: 1000,
@@ -87,14 +86,10 @@ class ApisixControlPlane extends Construct {
     const initContainer = deployment.addInitContainer({
       name: "config-initializer",
       image: image,
-      // FIX: Run the initContainer as root to ensure it has permissions
-      // to copy files and change ownership.
       securityContext: {
         user: 0,
         ensureNonRoot: false,
       },
-      // FIX: Command now copies files, applies custom config, and then
-      // changes ownership of the entire directory to the non-root user.
       command: [
         "sh",
         "-c",
@@ -129,12 +124,6 @@ class ApisixControlPlane extends Construct {
   }
 }
 
-/**
- * Defines the APISIX Data Plane.
- *
- * FIX: This construct has been updated to use the same robust initContainer
- * pattern as the control plane, ensuring consistency and preventing permission errors.
- */
 export class ApisixDataPlane extends Construct {
   constructor(scope: Construct, id: string) {
     super(scope, id);
