@@ -4,6 +4,7 @@ import {
   ConfigMap,
   Deployment,
   Namespace,
+  PodSecurityContext,
   ServiceType,
   Volume,
 } from "cdk8s-plus-28";
@@ -55,49 +56,29 @@ class ApisixControlPlane extends Construct {
       },
     });
 
-    // Define shared volumes
-    const confVolume = Volume.fromEmptyDir(
-      this,
-      "control-plane-conf-volume", // Use a unique name for the construct ID
-      "apisix-conf",
-    );
-    const logsVolume = Volume.fromEmptyDir(
-      this,
-      "control-plane-logs-volume",
-      "apisix-logs",
-    );
-    const tempVolume = Volume.fromEmptyDir(
-      this,
-      "control-plane-temp-volume",
-      "apisix-temp",
-    );
-    // This volume provides the custom config.yaml and is now only used by the init container.
-    const configMapVolume = Volume.fromConfigMap(
-      this,
-      "config-volume",
-      configMap,
-    );
-
-    const deployment = new Deployment(this, 'deployment', {
+    const deployment = new Deployment(this, "deployment", {
       metadata: { namespace: APP_NAMESPACE },
       replicas: 1,
       podMetadata: { labels: labels },
+      securityContext: new PodSecurityContext({
+        user: 1000,
+        fsGroup: 1000,
+        group: 1000,
+      }),
     });
     // Create a volume from the ConfigMap to mount into the pod.
-    const configVolume = Volume.fromConfigMap(this, 'config-volume', configMap);
-
-
+    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
 
     // Add the APISIX container to the deployment.
     deployment.addContainer({
-      name: 'apisix-control-plane',
+      name: "apisix-control-plane",
       image: image,
-      ports: [{ number: 9180, name: 'admin-api' }],
+      ports: [{ number: 9180, name: "admin-api" }],
       volumeMounts: [
         {
           volume: configVolume,
-          path: '/usr/local/apisix/conf/config.yaml', // Mount path for APISIX config
-          subPath: 'config.yaml', // Mount the specific key as a file
+          path: "/usr/local/apisix/conf/config.yaml", // Mount path for APISIX config
+          subPath: "config.yaml", // Mount the specific key as a file
         },
       ],
     });
@@ -120,9 +101,9 @@ export class ApisixDataPlane extends Construct {
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
-    const image = 'apache/apisix:3.9.1-debian';
-    const replicas =  2;
-    const labels = { app: 'apisix-data-plane' };
+    const image = "apache/apisix:3.9.1-debian";
+    const replicas = 2;
+    const labels = { app: "apisix-data-plane" };
 
     // 1. Define the Data Plane's configuration.
     // This configuration disables the Admin API for security.
@@ -132,47 +113,47 @@ export class ApisixDataPlane extends Construct {
         enable_admin: false, // Critical: Disables the Admin API on the data plane.
       },
       deployment: {
-        role: 'data_plane', // Critical: Defines the instance role.
+        role: "data_plane", // Critical: Defines the instance role.
         role_data_plane: {
-          config_provider: 'etcd',
+          config_provider: "etcd",
         },
         etcd: {
           host: [ETCD_HOST_FQDN], // Connects to the same etcd as the control plane.
-          prefix: '/apisix',
+          prefix: "/apisix",
           timeout: 30,
         },
       },
     };
 
     // 2. Create the Kubernetes ConfigMap.
-    const configMap = new ConfigMap(this, 'config', {
+    const configMap = new ConfigMap(this, "config", {
       metadata: {
-        name: 'apisix-data-plane-config',
+        name: "apisix-data-plane-config",
         namespace: APP_NAMESPACE,
       },
       data: {
-        'config.yaml': Yaml.stringify(dataPlaneConfig),
+        "config.yaml": Yaml.stringify(dataPlaneConfig),
       },
     });
 
     // 3. Create the Kubernetes Deployment.
-    const deployment = new Deployment(this, 'deployment', {
+    const deployment = new Deployment(this, "deployment", {
       metadata: { namespace: APP_NAMESPACE },
       replicas: replicas,
       podMetadata: { labels: labels },
     });
 
-    const configVolume = Volume.fromConfigMap(this, 'config-volume', configMap);
+    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
 
     deployment.addContainer({
-      name: 'apisix-data-plane',
+      name: "apisix-data-plane",
       image: image,
-      ports: [{ number: 9080, name: 'proxy-http' }],
+      ports: [{ number: 9080, name: "proxy-http" }],
       volumeMounts: [
         {
           volume: configVolume,
-          path: '/usr/local/apisix/conf/config.yaml',
-          subPath: 'config.yaml',
+          path: "/usr/local/apisix/conf/config.yaml",
+          subPath: "config.yaml",
         },
       ],
     });
@@ -180,9 +161,9 @@ export class ApisixDataPlane extends Construct {
     // 4. Expose the Data Plane proxy via a LoadBalancer Service.
     // This makes the API gateway accessible from the internet.
     deployment.exposeViaService({
-      name: 'apisix-gateway',
+      name: "apisix-gateway",
       serviceType: ServiceType.LOAD_BALANCER,
-      ports: [{ port: 80, targetPort: 9080, name: 'http' }],
+      ports: [{ port: 80, targetPort: 9080, name: "http" }],
     });
   }
 }
