@@ -64,6 +64,7 @@ class ApisixControlPlane extends Construct {
       metadata: { namespace: APP_NAMESPACE },
       replicas: 1,
       podMetadata: { labels: labels },
+      // This security context applies to the main container, ensuring it runs as a non-root user.
       securityContext: new PodSecurityContext({
         user: 1000,
         fsGroup: 1000,
@@ -71,8 +72,40 @@ class ApisixControlPlane extends Construct {
       }),
     });
 
-    // Create a single volume from the ConfigMap.
-    const configVolume = Volume.fromConfigMap(this, "config-volume", configMap);
+    const configSourceVolume = Volume.fromConfigMap(
+      this,
+      "config-source-volume",
+      configMap
+    );
+    
+    const apisixWritableVolume = Volume.fromEmptyDir(
+      this,
+      "apisix-writable-dir-volume",
+      "apisix-writable-dir"
+    );
+
+    const initContainer = deployment.addInitContainer({
+      name: "config-initializer",
+      image: image,
+      // FIX: Run the initContainer as root to ensure it has permissions
+      // to copy files and change ownership.
+      securityContext: {
+        user: 0,
+        ensureNonRoot: false,
+      },
+      // FIX: Command now copies files, applies custom config, and then
+      // changes ownership of the entire directory to the non-root user.
+      command: [
+        "sh",
+        "-c",
+        "cp -r /usr/local/apisix/* /writable-apisix/ && cp /source-config/config.yaml /writable-apisix/conf/config.yaml && chown -R 1000:1000 /writable-apisix",
+      ],
+    });
+
+    initContainer.mount("/source-config", configSourceVolume, {
+      readOnly: true,
+    });
+    initContainer.mount("/writable-apisix", apisixWritableVolume);
 
     const apisixContainer = deployment.addContainer({
       name: "apisix-control-plane",
@@ -80,9 +113,7 @@ class ApisixControlPlane extends Construct {
       ports: [{ number: 9180, name: "admin-api" }],
     });
 
-    apisixContainer.mount("/usr/local/apisix/conf/config.yaml", configVolume, {
-      subPath: "config.yaml",
-    });
+    apisixContainer.mount("/usr/local/apisix", apisixWritableVolume);
 
     deployment.exposeViaService({
       name: "apisix-admin",
