@@ -8,7 +8,6 @@ import {
   Volume,
 } from "cdk8s-plus-28";
 
-// const apisixConfigName = "apisix-config";
 const APP_NAMESPACE = "default";
 
 const ETCD_HOST_FQDN = `http://etcd.${APP_NAMESPACE}.svc.cluster.local:2379`;
@@ -27,6 +26,15 @@ class ApisixControlPlane extends Construct {
         "config.yaml": Yaml.stringify({
           apisix: {
             node_listen: 9080,
+            nginx_config: {
+              http: {
+                client_body_temp_path: "temp/client_body_temp",
+                proxy_temp_path: "temp/proxy_temp",
+                fastcgi_temp_path: "temp/fastcgi_temp",
+                uwsgi_temp_path: "temp/uwsgi_temp",
+                scgi_temp_path: "temp/scgi_temp",
+              },
+            },
           },
           deployment: {
             role: "control_plane",
@@ -57,15 +65,21 @@ class ApisixControlPlane extends Construct {
       },
     });
 
+    // Define shared volumes
     const confVolume = Volume.fromEmptyDir(
       this,
-      "apisix-conf-volume",
+      "data-plane-conf-volume",
       "apisix-conf",
     );
     const logsVolume = Volume.fromEmptyDir(
       this,
-      "apisix-logs-volume",
+      "data-plane-logs-volume",
       "apisix-logs",
+    );
+    const tempVolume = Volume.fromEmptyDir(
+      this,
+      "data-plane-temp-volume",
+      "apisix-temp",
     );
     const configMapVolume = Volume.fromConfigMap(
       this,
@@ -80,7 +94,7 @@ class ApisixControlPlane extends Construct {
       securityContext: {
         fsGroup: 1000,
       },
-      volumes: [confVolume, logsVolume, configMapVolume],
+      volumes: [confVolume, logsVolume, tempVolume, configMapVolume],
     });
 
     const initContainer = deployment.addInitContainer({
@@ -115,6 +129,10 @@ class ApisixControlPlane extends Construct {
         {
           volume: logsVolume,
           path: "/usr/local/apisix/logs",
+        },
+        {
+          volume: tempVolume,
+          path: "/usr/local/apisix/temp",
         },
         {
           volume: configMapVolume,
