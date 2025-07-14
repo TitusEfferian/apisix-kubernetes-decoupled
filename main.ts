@@ -4,7 +4,9 @@ import { App, Chart, ChartProps, Include, Yaml } from "cdk8s";
 
 import {
   ConfigMap,
+  ContainerSecurityContext,
   Deployment,
+  EnvValue,
   Namespace,
   PodSecurityContext,
   ServiceType,
@@ -239,8 +241,14 @@ export class ApisixDashboard extends Construct {
     super(scope, id);
 
     const labels = { app: "apisix-dashboard" };
-    const image = "apache/apisix-dashboard:3.0.1-alpine";
+    // MODIFICATION: Switched to the Bitnami image. Using a specific, immutable tag is recommended for production.
+    const image = "bitnami/apisix-dashboard:latest";
+    const adminApiKey = "edd1c9f034335f136f87ad84b625c8f1";
 
+    // MODIFICATION: The Bitnami image uses different configuration.
+    // - The frontend config (config.json) is now handled by environment variables.
+    // - The backend config (conf.yaml) is simplified. The listening port is changed to 8080.
+    // - Log paths are removed to allow the container to log to stdout, which is standard practice.
     const configMap = new ConfigMap(this, "config", {
       metadata: {
         namespace: APP_NAMESPACE,
@@ -251,18 +259,14 @@ export class ApisixDashboard extends Construct {
           conf: {
             listen: {
               host: "0.0.0.0",
-              port: 9000, // Internal port for the manager-api backend
+              port: 8080, // Bitnami image listens on port 8080 by default.
             },
             etcd: {
-              // The key must be 'endpoints' and it must be a list.
-              endpoints: [
-                `http://etcd.${APP_NAMESPACE}.svc.cluster.local:2379`,
-              ],
+              endpoints: [ETCD_HOST_FQDN],
             },
             authentication: {
               secret: "secret", // IMPORTANT: Change this in a real environment
               expire_time: 3600,
-              // A default user is required for initial login.
               users: [
                 {
                   username: "admin",
@@ -274,27 +278,8 @@ export class ApisixDashboard extends Construct {
                 },
               ],
             },
-            allow_list: [],
-            // Define log paths to ensure they are writable.
-            log: {
-              error_log: {
-                file_path: "/usr/local/apisix-dashboard/logs/error.log",
-                level: "warn",
-              },
-              access_log: {
-                file_path: "/usr/local/apisix-dashboard/logs/access.log",
-              },
-            },
           },
         }),
-        "config.json": JSON.stringify([
-          {
-            name: "APISIX on Kubernetes",
-            // This must point to the 'apisix-admin' service created by the Control Plane construct.
-            host: `http://apisix-admin.${APP_NAMESPACE}.svc.cluster.local:9180`,
-            key: "edd1c9f034335f136f87ad84b625c8f1",
-          },
-        ]),
       },
     });
 
@@ -304,6 +289,7 @@ export class ApisixDashboard extends Construct {
       "logs-volume",
       "apisix-dashboard-logs",
     );
+
     const deployment = new Deployment(this, "deployment", {
       metadata: {
         namespace: APP_NAMESPACE,
@@ -311,29 +297,42 @@ export class ApisixDashboard extends Construct {
       },
       podMetadata: { labels },
       replicas: 1,
+      // MODIFICATION: Added PodSecurityContext. The fsGroup ensures that volumes are writable by the non-root user.
+      securityContext: new PodSecurityContext({
+        fsGroup: 1001,
+      }),
       containers: [
         {
           name: "apisix-dashboard",
           image: image,
-          securityContext: {
-            user: 0,
-            ensureNonRoot: false,
+          // MODIFICATION: Set security context to run as the non-root 'bitnami' user (1001).
+          securityContext: new ContainerSecurityContext({
+            user: 1001,
+            group: 1001,
+            ensureNonRoot: true,
+          }),
+          // MODIFICATION: The container port is now 8080.
+          ports: [{ number: 8080, name: "http" }],
+          // MODIFICATION: Configure API endpoint via environment variables, the Bitnami-native way.
+          envVariables: {
+            // This sets the backend API endpoint for the frontend UI.
+            APISIX_DASHBOARD_API_URL_1: EnvValue.fromValue(
+              `http://apisix-admin.${APP_NAMESPACE}.svc.cluster.local:9180`,
+            ),
+            // This sets the API key for the backend.
+            APISIX_DASHBOARD_API_KEY_1: EnvValue.fromValue(adminApiKey),
           },
-          ports: [{ number: 9000, name: "http" }],
+          // MODIFICATION: Volume mounts are updated for the Bitnami image's file structure.
+          // The config.json mount is no longer needed.
           volumeMounts: [
             {
               volume: configVolume,
-              path: "/usr/share/nginx/html/assets/config.json",
-              subPath: "config.json",
-            },
-            {
-              volume: configVolume,
-              path: "/usr/local/apisix-dashboard/conf/conf.yaml",
+              path: "/opt/bitnami/apisix-dashboard/conf/conf.yaml",
               subPath: "conf.yaml",
             },
             {
               volume: logsVolume,
-              path: "/usr/local/apisix-dashboard/logs",
+              path: "/opt/bitnami/apisix-dashboard/logs",
             },
           ],
         },
@@ -343,7 +342,8 @@ export class ApisixDashboard extends Construct {
     deployment.exposeViaService({
       name: "apisix-dashboard",
       serviceType: ServiceType.CLUSTER_IP,
-      ports: [{ port: 80, targetPort: 9000 }],
+      // MODIFICATION: The service now targets the container's port 8080.
+      ports: [{ port: 80, targetPort: 8080 }],
     });
   }
 }
