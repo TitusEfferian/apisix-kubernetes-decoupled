@@ -268,8 +268,13 @@ export class ApisixDashboard extends Construct {
                   username: "admin",
                   password: "admin",
                 },
+                {
+                  username: "user",
+                  password: "user",
+                },
               ],
             },
+            allow_list: [],
             // Define log paths to ensure they are writable.
             log: {
               error_log: {
@@ -314,7 +319,7 @@ export class ApisixDashboard extends Construct {
             user: 0,
             ensureNonRoot: false,
           },
-          ports: [{ number: 80, name: "http" }],
+          ports: [{ number: 9000, name: "http" }],
           volumeMounts: [
             {
               volume: configVolume,
@@ -338,7 +343,7 @@ export class ApisixDashboard extends Construct {
     deployment.exposeViaService({
       name: "apisix-dashboard",
       serviceType: ServiceType.CLUSTER_IP,
-      ports: [{ port: 80, targetPort: 80 }],
+      ports: [{ port: 80, targetPort: 9000 }],
     });
   }
 }
