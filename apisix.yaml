@@ -1,0 +1,27 @@
+# This file contains the declarative routing rules for Apache APISIX.
+# It should be placed in the same directory as your main.ts file.
+
+# Defines a backend server pool.
+upstreams:
+  - id: 1
+    type: roundrobin
+    nodes:
+      "httpbin.org:80": 1
+
+# Defines the core routing rules.
+routes:
+  - id: "httpbin-route"
+    uri: /get
+    methods:
+      - GET
+    upstream_id: 1
+  - id: "google-redirect-route"
+    uri: /google
+    plugins:
+      redirect:
+        uri: "https://www.google.com"
+        ret_code: 301
+
+# This marker is CRITICAL. APISIX will not load the file without it.
+# It ensures that APISIX only loads a complete configuration file.
+#END

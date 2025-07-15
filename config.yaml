@@ -1,0 +1,11 @@
+# This file configures the APISIX engine to run in standalone mode.
+# It should be placed in the same directory as your main.ts file.
+apisix:
+  # The Admin API is disabled as it's not used in standalone mode.
+  enable_admin: false
+deployment:
+  # Defines the role of this APISIX instance.
+  role: data_plane
+  role_data_plane:
+    # Specifies that the configuration provider is a local YAML file.
+    config_provider: yaml
