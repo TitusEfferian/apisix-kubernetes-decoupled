@@ -64,22 +64,22 @@ class Standalone extends Construct {
       "routes-volume",
       apisixRoutesConfigMap,
     );
-    // A writable emptyDir volume for the configuration directory.
+
     const confVolume = Volume.fromEmptyDir(this, "conf-volume", "apisix-conf", {
       medium: EmptyDirMedium.MEMORY,
     });
-    // A writable emptyDir volume for the /tmp directory.
+
     const tmpVolume = Volume.fromEmptyDir(this, "tmp-volume", "apisix-tmp", {
       medium: EmptyDirMedium.MEMORY,
     });
-    // A writable emptyDir volume for client body temp files.
+
     const clientBodyTempVolume = Volume.fromEmptyDir(
       this,
       "client-body-temp-volume",
       "apisix-client-body-temp",
       { medium: EmptyDirMedium.MEMORY },
     );
-    // A writable emptyDir volume for proxy temp files.
+
     const proxyTempVolume = Volume.fromEmptyDir(
       this,
       "proxy-temp-volume",
@@ -106,7 +106,6 @@ class Standalone extends Construct {
       medium: EmptyDirMedium.MEMORY,
     });
 
-    // --- APISIX Deployment ---
     const deployment = new Deployment(this, "deployment", {
       metadata: {
         namespace: APP_NAMESPACE,
@@ -188,7 +187,6 @@ class Standalone extends Construct {
           ],
         },
       ],
-      // Add all volumes to the pod's list of volumes.
       volumes: [
         configVolume,
         routesVolume,
@@ -203,13 +201,12 @@ class Standalone extends Construct {
       ],
     });
 
-    // --- Service to Expose APISIX Gateway ---
     new Service(this, "gateway-service", {
       metadata: {
         namespace: APP_NAMESPACE,
       },
       selector: deployment,
-      type: ServiceType.LOAD_BALANCER,
+      type: ServiceType.CLUSTER_IP,
       ports: [{ port: 80, targetPort: 9080, name: "http" }],
     });
   }
